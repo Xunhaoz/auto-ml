@@ -33,7 +33,7 @@
 2. 測試API連接
 
     ```shell
-    curl http://localhost/api/
+    http://localhost/apidocs/
     ```
 
 ## API
