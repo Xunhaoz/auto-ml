@@ -1,3 +1,4 @@
 .idea
 .venv
 ml_database.db
+catboost_info

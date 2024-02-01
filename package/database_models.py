@@ -25,6 +25,8 @@ class Regression(db.Model):
 class CSV(db.Model):
     file_id = db.Column(db.String(36), primary_key=True, unique=True)
     file_name = db.Column(db.String(255))
+    project_name = db.Column(db.String(255))
+    task = db.Column(db.Integer)
     file_path = db.Column(db.String(255))
     file_info_path = db.Column(db.String(255))
     file_pic_path = db.Column(db.String(255))

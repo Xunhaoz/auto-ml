@@ -11,6 +11,7 @@ from package.dataframe_operator import DataframeOperator
 
 from flasgger import Swagger
 from flask import Flask, request, send_file
+from flask_cors import CORS
 
 if not os.path.exists('file'):
     os.makedirs('file')
@@ -59,22 +60,61 @@ def test_connection():
 @app.route('/api/upload_csv', methods=['POST'])
 def upload_csv():
     """
-    Upload a CSV file.
+    Uploads a CSV file and saves information to the database.
+
     ---
     tags:
       - CSV
+
     parameters:
       - name: file
         in: formData
         type: file
-        description: The CSV file to be uploaded.
+        required: true
+        description: The CSV file to upload.
+      - name: project_name
+        in: formData
+        type: string
+        required: true
+        description: The name of the project associated with the CSV file.
+
     responses:
       200:
-        description: Upload successful.
+        description: Upload success.
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: upload success.
+            response:
+              type: object
+              properties:
+                uuid:
+                  type: string
+                  description: The unique identifier for the uploaded file.
       400:
-        description: Bad request.
+        description: Upload fail.
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: upload fail.
+            response:
+              type: string
+              description: Error message describing the reason for failure.
       500:
-        description: Internal server error.
+        description: Sever error.
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: sever error
+            response:
+              type: string
+              description: Error message describing the internal server error.
     """
     file_id = str(uuid.uuid4())
     file_dir = f'file/{file_id}/'
@@ -84,19 +124,21 @@ def upload_csv():
 
     try:
         uploaded_file = request.files['file']
+        project_name = request.form['project_name']
         assert uploaded_file.filename.endswith('.csv'), "upload file should be file formate"
     except Exception as e:
-        return Response.client_error('upload fail', e)
+        return Response.client_error('upload fail', str(e))
 
     os.makedirs(file_dir)
     uploaded_file.save(file_path)
-    dataframe_operator = DataframeOperator(file_path)
-    dataframe_operator.save_info(info_path, uploaded_file.filename)
+    dataframe_operator = DataframeOperator(file_path, uploaded_file.filename, project_name)
+    dataframe_operator.save_info(info_path)
     dataframe_operator.save_pic(pic_path)
+    dataframe_operator.data_preprocess()
 
     db.session.add(CSV(
-        file_id=file_id, file_name=uploaded_file.filename, file_path=file_path,
-        file_info_path=info_path, file_pic_path=pic_path
+        file_id=file_id, file_name=uploaded_file.filename, project_name=project_name, task=None,
+        file_path=file_path, file_info_path=info_path, file_pic_path=pic_path
     ))
     db.session.commit()
 
@@ -107,10 +149,11 @@ def upload_csv():
 def get_csv_info():
     """
     Get information about a CSV file.
-    This endpoint returns information about the specified CSV file.
+
     ---
     tags:
       - CSV
+
     parameters:
       - name: file_id
         in: query
@@ -121,10 +164,92 @@ def get_csv_info():
     responses:
       200:
         description: Success
+        schema:
+          type: object
+          properties:
+            file_name:
+              type: string
+              description: name of file
+            project_name:
+              type: string
+              description: name of project
+            row_num:
+              type: integer
+              description: length of row
+            column_num:
+              type: integer
+              description: length of column
+            columns:
+              type: array
+              items:
+                type: string
+            column_info:
+              type: object
+              properties:
+                continuous_column:
+                  type: object
+                  properties:
+                    count:
+                      type: integer
+                      description: length of this column
+                    mean:
+                      type: number
+                      description: mean of this column
+                    std:
+                      type: number
+                      description: std of this column
+                    min:
+                      type: number
+                      description: min of this column
+                    25%:
+                      type: number
+                      description: 25% of this column
+                    50%:
+                      type: number
+                      description: 50% of this column
+                    75%:
+                      type: number
+                      description: 75% of this column
+                    max:
+                      type: number
+                      description: max of this column
+                    column_class:
+                      type: string
+                      description: continuous variable
+                    nan:
+                      type: integer
+                      description: null value of this column
+                    total:
+                      type: integer
+                      description: length of this column
+                discrete_column:
+                  type: object
+                  properties:
+                    value_name:
+                      type: integer
+                      description: number of this value
+                    column_class:
+                      type: string
+                      description: continuous variable
+                    nan:
+                      type: integer
+                      description: null value of this column
+                    total:
+                      type: integer
+                      description: length of this column
       404:
         description: File not found
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: file not found
+            response:
+              type: string
+              description: Error message describing the internal server error.
     """
-    file_id = request.args.get('file_id')
+    file_id = request.args.get('uuid')
     csv = CSV.query.filter_by(file_id=file_id).first()
 
     if not (csv and os.path.exists(csv.file_info_path)):
@@ -133,11 +258,53 @@ def get_csv_info():
     return send_file(csv.file_info_path)
 
 
+@app.route('/api/all_csv', methods=['GET'])
+def get_all_csv():
+    """
+    Get all CSV list.
+
+    ---
+    tags:
+      - CSV
+
+    responses:
+      200:
+        description: Get all csvs success
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: get csvs success
+            response:
+              type: array
+              items:
+                type: object
+                properties:
+                  file_id:
+                    type: string
+                    description: length of row
+                  project_name:
+                    type: string
+                    description: length of row
+                  task:
+                    type: string
+                    description: length of row
+    """
+    csvs = CSV.query.all()
+
+    result = [{
+        'file_id': csv.file_id, 'project_name': csv.project_name, 'task': csv.task
+    } for csv in csvs]
+
+    return Response.response('get csvs success', result)
+
+
 @app.route('/api/csv_corr', methods=['GET'])
 def get_csv_corr():
     """
     Get the correlation matrix plot for a CSV file.
-    This endpoint returns the correlation matrix plot image for the specified CSV file.
+
     ---
     tags:
       - CSV
@@ -149,9 +316,24 @@ def get_csv_corr():
         description: The ID of the CSV file.
     responses:
       200:
-        description: Success
+        description: Successful PNG retrieval.
+        content:
+          image/png:
+            schema:
+              type: string
+              format: binary
+
       404:
         description: File not found
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: file not found
+            response:
+              type: string
+              description: Error message describing the internal server error.
     """
     file_id = request.args.get('file_id')
     csv = CSV.query.filter_by(file_id=file_id).first()
@@ -225,7 +407,7 @@ def train_model():
     if not (csv and os.path.exists(csv.file_path)):
         return Response.not_found('file not found')
 
-    dataframe_operator = DataframeOperator(csv.file_path)
+    dataframe_operator = DataframeOperator(csv.file_path, csv.file_name, csv.project_name)
     mission_type = dataframe_operator.check_mission_type(mission_type)
     feature = dataframe_operator.check_feature(feature)
     label = dataframe_operator.check_label(label)
@@ -320,6 +502,7 @@ def get_train_result():
         return Response.not_found("file not found")
 
     return Response.response("get file result", result)
+
 
 @app.route('/api/train_pic', methods=['GET'])
 def get_train_pic():

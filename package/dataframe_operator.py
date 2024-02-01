@@ -8,9 +8,11 @@ from sklearn.preprocessing import StandardScaler, OrdinalEncoder
 
 
 class DataframeOperator:
-    def __init__(self, file_path):
+    def __init__(self, file_path, file_name, project_name):
         self.file_path = file_path
         self.df = pd.read_csv(self.file_path)
+        self.file_name = file_name
+        self.project_name = project_name
 
     def check_feature(self, features):
         columns = self.df.columns.to_numpy()
@@ -35,19 +37,17 @@ class DataframeOperator:
         columns = self.df.columns
         for column in columns:
             series = self.df[column]
-            if 15 > len(series.value_counts()):
-                self.df = pd.concat([self.df, pd.get_dummies(self.df[column], prefix='prefix')], axis=1)
-                self.df = self.df.drop(columns=[column])
-            elif series.dtype == 'object':
+            if 15 > len(series.value_counts()) or series.dtype == 'object':
                 self.df[column] = OrdinalEncoder().fit_transform(self.df[[column]])
             else:
                 self.df[column] = StandardScaler().fit_transform(self.df[[column]])
 
         self.df.to_csv(self.file_path)
 
-    def save_info(self, info_path, file_name):
+    def save_info(self, info_path):
         result = {
-            'file_name': file_name,
+            'file_name': self.file_name,
+            'project_name': self.project_name,
             'row_num': self.df.shape[0],
             'column_num': self.df.shape[1],
             'columns': list(map(str, self.df.columns)),
