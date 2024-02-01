@@ -1,90 +1,100 @@
-import copy
-import sqlite3
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import cross_validate
 from sklearn.model_selection import train_test_split
+from package.database_models import *
+
+from lightgbm import LGBMRegressor, LGBMClassifier
+from xgboost import XGBRegressor, XGBClassifier
+from catboost import CatBoostRegressor, CatBoostClassifier
 
 
-class TrainModelBase:
-    CLASSIFICATION_SCORE_NAME = ['accuracy', 'average_precision', 'recall_weighted']
-    REGRESSION_SCORE_NAME = ['neg_mean_absolute_error', 'neg_mean_squared_error', 'r2']
+def np2float(arr):
+    return round(float(arr.mean()), 2)
 
-    def __init__(self, csv_path: str, label_column: int, feature_columns: list, class_or_reg: int):
-        self.csv_path = csv_path
-        self.file_id = csv_path.replace('.csv', '').replace('\\', '/').split('/')[-1]
-        self.label_column = label_column
-        self.feature_columns = feature_columns
-        self.class_or_reg = class_or_reg
 
-        self.model_name = None
-        self.model = None
-        self.score_names = self.CLASSIFICATION_SCORE_NAME if class_or_reg else self.REGRESSION_SCORE_NAME
-        self.scores = None
+def training_fool_poof(csv_path, label_column, feature_columns, class_or_reg):
+    assert class_or_reg in ['classification', 'regression'], 'mission type error'
 
-        self.dataframe = None
-        self.label = None
-        self.features = None
+    df = pd.read_csv(csv_path).dropna()
+    for column in feature_columns + [label_column]:
+        assert column in df.columns, 'either label or feature columns is error'
 
-    def read_csv(self):
-        self.dataframe = pd.read_csv(self.csv_path)
-        self.label = self.dataframe.iloc[:, self.label_column]
-        self.features = self.dataframe.iloc[:, self.feature_columns]
+    label_column_series = df[label_column]
+    if label_column_series.dtype == "object" or 15 > len(label_column_series.value_counts()):
+        assert class_or_reg == 'classification', 'mission type error'
+    else:
+        assert class_or_reg == 'regression', 'mission type error'
 
-    def cross_validation(self):
-        res = cross_validate(self.model, self.features, self.label, scoring=self.score_names)
-        if self.class_or_reg:
-            self.scores = {
-                "accuracy": res['test_accuracy'].mean(),
-                "precision": res['test_average_precision'].mean(),
-                "recall": res['test_recall_weighted'].mean()
-            }
-        else:
-            self.scores = {
-                "mae": -res['test_neg_mean_absolute_error'].mean(),
-                "mse": -res['test_neg_mean_squared_error'].mean(),
-                "r_square": res['test_r2'].mean()
-            }
+    if class_or_reg == 'classification':
+        models = [XGBClassifier(), LGBMClassifier(verbose=-1), CatBoostClassifier(verbose=False)]
+        scores = ['accuracy', 'average_precision', 'recall_weighted']
+    else:
+        models = [XGBRegressor(), LGBMRegressor(verbose=-1), CatBoostRegressor(verbose=False)]
+        scores = ['neg_mean_absolute_error', 'neg_mean_squared_error', 'r2']
 
-        self.scores = {k: round(float(v), 2) for k, v in self.scores.items()}
+    return df, models, scores
 
-    def store_result(self):
-        conn = sqlite3.connect('instance/ml_database.db')
-        cursor = conn.cursor()
 
-        if self.class_or_reg:
-            insert_data_sql = f'INSERT INTO `classification` (`file_id`, `model`, `accuracy`, `precision`, `recall`) VALUES (?, ?, ?, ?, ?)'
-            data_to_insert = (
-                self.file_id, self.model_name, self.scores['accuracy'], self.scores['precision'], self.scores['recall'])
-        else:
-            insert_data_sql = f'INSERT INTO `regression` (`file_id`, `model`, `mae`, `mse`, `r_square`) VALUES (?, ?, ?, ?, ?)'
-            data_to_insert = (
-                self.file_id, self.model_name, self.scores['mae'], self.scores['mse'], self.scores['r_square'])
+def training_plotting_pipline(*args):
+    file_id, csv_path, label_column, feature_columns, class_or_reg, app = args
+    df, models, scores = training_fool_poof(csv_path, label_column, feature_columns, class_or_reg)
 
-        cursor.execute(insert_data_sql, data_to_insert)
-        conn.commit()
-        cursor.close()
-        conn.close()
+    X_train, X_test, y_train, y_test = train_test_split(
+        df[feature_columns], df[label_column], test_size=0.33, random_state=42)
 
-    def plot_result(self):
-        X_train, X_test, y_train, y_test = train_test_split(self.features, self.label, test_size=0.33, random_state=42)
-        model = copy.deepcopy(self.model)
+    for model in models:
+        plt.figure()
+
         model.fit(X_train, y_train)
-
-        if self.class_or_reg:
+        if class_or_reg == 'classification':
             cm = confusion_matrix(y_test, model.predict(X_test))
             plot = sns.heatmap(cm, annot=True, cmap='coolwarm', fmt=".2f")
             plot.set_xticklabels(plot.get_xticklabels(), rotation=45, horizontalalignment='right')
-
+            plt.title('confusion_matrix')
         else:
             df = pd.DataFrame({'y_true': y_test, 'y_predict': model.predict(X_test)})
             df = df.sort_values(by=['y_true'], ignore_index=True)
             sns.lineplot(df)
+            plt.title('prediction')
 
-        png_path = self.csv_path.split('/')
-        png_path[-1] = self.model_name + '.png'
+        png_path = csv_path.split('/')
+        png_path[-1] = model.__class__.__name__ + '.png'
 
-        plt.title('confusion_matrix')
-        plt.savefig('/'.join(png_path), bbox_inches='tight', transparent=True)
+        plt.savefig('/'.join(png_path), transparent=True, format="png")
+
+
+def training_pipline(*args):
+    file_id, csv_path, label_column, feature_columns, class_or_reg, app = args
+    df, models, scores = training_fool_poof(csv_path, label_column, feature_columns, class_or_reg)
+
+    X, y = df[feature_columns], df[label_column]
+
+    for model in models:
+        res = cross_validate(model, X, y, scoring=scores)
+
+        if class_or_reg == 'classification':
+            table = Classification(
+                file_id=file_id,
+                model=model.__class__.__name__,
+                accuracy=np2float(res['test_accuracy']),
+                precision=np2float(res['test_accuracy']),
+                recall=np2float(res['test_accuracy']),
+            )
+        else:
+            table = Regression(
+                file_id=file_id,
+                model=model.__class__.__name__,
+                mse=np2float(-res['test_neg_mean_absolute_error']),
+                mae=np2float(-res['test_neg_mean_squared_error']),
+                r_square=np2float(res['test_r2']),
+            )
+
+        with app.app_context():
+            db.session.add(table)
+            csv = CSV.query.filter_by(file_id=file_id).first()
+            csv.status = 'finish'
+            db.session.commit()

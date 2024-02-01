@@ -1,6 +1,8 @@
 FROM python:3.10-slim AS install-base
 
 RUN apt-get update -y
+RUN apt-get install libgomp1
+
 RUN pip install --upgrade pip
 RUN pip install gunicorn
 

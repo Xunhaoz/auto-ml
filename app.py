@@ -3,15 +3,15 @@
 import os
 import uuid
 import subprocess
-import json
+import threading
 
 from package.response import Response
 from package.database_models import *
 from package.dataframe_operator import DataframeOperator
+from script.train_model_base import *
 
 from flasgger import Swagger
 from flask import Flask, request, send_file
-from flask_cors import CORS
 
 if not os.path.exists('file'):
     os.makedirs('file')
@@ -137,8 +137,8 @@ def upload_csv():
     dataframe_operator.data_preprocess()
 
     db.session.add(CSV(
-        file_id=file_id, file_name=uploaded_file.filename, project_name=project_name, task=None,
-        file_path=file_path, file_info_path=info_path, file_pic_path=pic_path
+        file_id=file_id, file_name=uploaded_file.filename, project_name=project_name, mission_type=None,
+        status="pending", file_path=file_path, file_info_path=info_path, file_pic_path=pic_path
     ))
     db.session.commit()
 
@@ -283,18 +283,21 @@ def get_all_csv():
                 properties:
                   file_id:
                     type: string
-                    description: length of row
+                    description: uuid of csv file
                   project_name:
                     type: string
-                    description: length of row
-                  task:
+                    description: name of project
+                  mission_type:
                     type: string
-                    description: length of row
+                    description: regression or classification
+                  status:
+                    type: string
+                    description: pending or finish
     """
     csvs = CSV.query.all()
 
     result = [{
-        'file_id': csv.file_id, 'project_name': csv.project_name, 'task': csv.task
+        'file_id': csv.file_id, 'project_name': csv.project_name, 'mission_type': csv.mission_type, 'status': csv.status
     } for csv in csvs]
 
     return Response.response('get csvs success', result)
@@ -349,11 +352,10 @@ def train_model():
     """
     Train machine learning models.
 
-    This endpoint allows training machine learning models using a specified CSV file.
-
     ---
     tags:
       - AI
+
     parameters:
       - name: file_id
         in: formData
@@ -384,11 +386,52 @@ def train_model():
 
     responses:
       200:
-        description: Training started successfully.
+        description: Training success.
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: training success.
+            response:
+              type: object
+              properties:
+                uuid:
+                  type: string
+                  description: The unique identifier for the uploaded file.
       400:
-        description: Client error.
+        description: Training fail.
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: training fail.
+            response:
+              type: string
+              description: Error message describing the reason for failure.
       404:
-        description: File not found.
+        description: File not Found.
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: file not found.
+            response:
+              type: string
+              description: Error message describing the reason for failure.
+      500:
+        description: Sever error.
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: sever error
+            response:
+              type: string
+              description: Error message describing the internal server error.
     """
     file_id = None
     mission_type = None
@@ -407,57 +450,20 @@ def train_model():
     if not (csv and os.path.exists(csv.file_path)):
         return Response.not_found('file not found')
 
-    dataframe_operator = DataframeOperator(csv.file_path, csv.file_name, csv.project_name)
-    mission_type = dataframe_operator.check_mission_type(mission_type)
-    feature = dataframe_operator.check_feature(feature)
-    label = dataframe_operator.check_label(label)
+    csv.mission_type = mission_type
+    db.session.commit()
 
-    models = ['xgboost', 'lightgbm', 'catboost']
-    for model in models:
-        subprocess.Popen(f"python ./script/train_{model}.py {csv.file_path} {label} {feature} {mission_type}",
-                         shell=True)
+    threading.Thread(
+        target=training_pipline,
+        args=(file_id, csv.file_path, label, feature, mission_type, app), daemon=True
+    ).start()
+
+    threading.Thread(
+        target=training_plotting_pipline,
+        args=(file_id, csv.file_path, label, feature, mission_type, app), daemon=True
+    ).start()
 
     return Response.response("training", {"uuid": file_id})
-
-
-@app.route('/api/train_progressing', methods=['GET'])
-def get_train_progressing():
-    """
-    Get the progress of the training for a specific file.
-    This endpoint retrieves the training progress for a given file identified by its unique ID.
-    ---
-    tags:
-      - AI
-    parameters:
-      - name: file_id
-        in: query
-        type: string
-        required: true
-        description: The unique ID of the file for which the training progress is requested.
-
-    responses:
-      200:
-        description: Successful response with training progress information.
-      404:
-        description: File not found.
-    """
-    file_id = request.args.get('file_id')
-
-    finish = set()
-
-    csvs = Classification.query.filter_by(file_id=file_id).all()
-    for csv in csvs:
-        finish.add(csv.model)
-
-    csvs = Regression.query.filter_by(file_id=file_id).all()
-    for csv in csvs:
-        finish.add(csv.model)
-
-    if len(finish) == 0:
-        return Response.not_found("file not found")
-
-    return Response.response(
-        "get file progress", {'progressing': round(len(finish) / 3, 2), 'finish': bool(len(finish) == 3)})
 
 
 @app.route('/api/train_result', methods=['GET'])
@@ -520,9 +526,24 @@ def get_train_pic():
 
     responses:
       200:
-        description: Successful response with result picture.
+        description: Successful PNG retrieval.
+        content:
+          image/png:
+            schema:
+              type: string
+              format: binary
+
       404:
-        description: File not found.
+        description: File not found
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: file not found
+            response:
+              type: string
+              description: Error message describing the internal server error.
     """
     file_id = request.args.get('file_id')
     result = []

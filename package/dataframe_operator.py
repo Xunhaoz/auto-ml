@@ -14,25 +14,6 @@ class DataframeOperator:
         self.file_name = file_name
         self.project_name = project_name
 
-    def check_feature(self, features):
-        columns = self.df.columns.to_numpy()
-        feature_pos_list = []
-        for feature in features:
-            feature_pos = np.where(columns == feature)[0]
-            assert feature_pos.size > 0, "feature not found"
-            feature_pos_list.append(str(feature_pos[0]))
-        return ','.join(feature_pos_list)
-
-    def check_label(self, label):
-        columns = self.df.columns.to_numpy()
-        label_pos = np.where(columns == label)[0]
-        assert label_pos.size > 0, "label not found"
-        return str(label_pos[0])
-
-    def check_mission_type(self, mission_type):
-        assert mission_type in ['regression', 'classification'], "mission type error, regression and classification"
-        return "1" if mission_type == 'classification' else "0"
-
     def data_preprocess(self):
         columns = self.df.columns
         for column in columns:
@@ -42,7 +23,7 @@ class DataframeOperator:
             else:
                 self.df[column] = StandardScaler().fit_transform(self.df[[column]])
 
-        self.df.to_csv(self.file_path)
+        self.df.to_csv(self.file_path, index=False)
 
     def save_info(self, info_path):
         result = {
@@ -72,7 +53,9 @@ class DataframeOperator:
         with open(info_path, 'w') as file:
             json.dump(result, file)
 
+
     def save_pic(self, pic_path):
+        plt.figure()
         correlation_matrix = self.df.corr()
         heatmap = sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f")
         heatmap.set_xticklabels(heatmap.get_xticklabels(), rotation=45, horizontalalignment='right')
