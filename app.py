@@ -249,7 +249,7 @@ def get_csv_info():
               type: string
               description: Error message describing the internal server error.
     """
-    file_id = request.args.get('uuid')
+    file_id = request.args.get('file_id')
     csv = CSV.query.filter_by(file_id=file_id).first()
 
     if not (csv and os.path.exists(csv.file_info_path)):
