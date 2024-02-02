@@ -69,32 +69,36 @@ def training_plotting_pipline(*args):
 
 def training_pipline(*args):
     file_id, csv_path, label_column, feature_columns, class_or_reg, app = args
-    df, models, scores = training_fool_poof(csv_path, label_column, feature_columns, class_or_reg)
+    try:
+        df, models, scores = training_fool_poof(csv_path, label_column, feature_columns, class_or_reg)
+        X, y = df[feature_columns], df[label_column]
+        for model in models:
+            res = cross_validate(model, X, y, scoring=scores)
+            if class_or_reg == 'classification':
+                table = Classification(
+                    file_id=file_id,
+                    model=model.__class__.__name__,
+                    accuracy=np2float(res['test_accuracy']),
+                    precision=np2float(res['test_accuracy']),
+                    recall=np2float(res['test_accuracy']),
+                )
+            else:
+                table = Regression(
+                    file_id=file_id,
+                    model=model.__class__.__name__,
+                    mse=np2float(-res['test_neg_mean_absolute_error']),
+                    mae=np2float(-res['test_neg_mean_squared_error']),
+                    r_square=np2float(res['test_r2']),
+                )
+            with app.app_context():
+                db.session.add(table)
+                csv = CSV.query.filter_by(file_id=file_id).first()
+                csv.status = 'finish'
+                db.session.commit()
 
-    X, y = df[feature_columns], df[label_column]
-
-    for model in models:
-        res = cross_validate(model, X, y, scoring=scores)
-
-        if class_or_reg == 'classification':
-            table = Classification(
-                file_id=file_id,
-                model=model.__class__.__name__,
-                accuracy=np2float(res['test_accuracy']),
-                precision=np2float(res['test_accuracy']),
-                recall=np2float(res['test_accuracy']),
-            )
-        else:
-            table = Regression(
-                file_id=file_id,
-                model=model.__class__.__name__,
-                mse=np2float(-res['test_neg_mean_absolute_error']),
-                mae=np2float(-res['test_neg_mean_squared_error']),
-                r_square=np2float(res['test_r2']),
-            )
-
+    except Exception as e:
         with app.app_context():
-            db.session.add(table)
             csv = CSV.query.filter_by(file_id=file_id).first()
-            csv.status = 'finish'
+            csv.status = 'failed'
             db.session.commit()
+
