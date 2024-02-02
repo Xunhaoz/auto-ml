@@ -23,12 +23,6 @@ def training_fool_poof(csv_path, label_column, feature_columns, class_or_reg):
     for column in feature_columns + [label_column]:
         assert column in df.columns, 'either label or feature columns is error'
 
-    label_column_series = df[label_column]
-    if label_column_series.dtype == "object" or 15 > len(label_column_series.value_counts()):
-        assert class_or_reg == 'classification', 'mission type error'
-    else:
-        assert class_or_reg == 'regression', 'mission type error'
-
     if class_or_reg == 'classification':
         models = [XGBClassifier(), LGBMClassifier(verbose=-1), CatBoostClassifier(verbose=False)]
         scores = ['accuracy', 'average_precision', 'recall_weighted']
@@ -97,6 +91,7 @@ def training_pipline(*args):
                 db.session.commit()
 
     except Exception as e:
+        print(e)
         with app.app_context():
             csv = CSV.query.filter_by(file_id=file_id).first()
             csv.status = 'failed'

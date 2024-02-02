@@ -453,8 +453,6 @@ def train_model():
     csv.mission_type = mission_type
     db.session.commit()
 
-    training_fool_poof(csv.file_path, label, feature, mission_type)
-
     threading.Thread(
         target=training_pipline,
         args=(file_id, csv.file_path, label, feature, mission_type, app), daemon=True
