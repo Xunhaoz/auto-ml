@@ -33,7 +33,7 @@
 2. 測試API連接
 
     ```shell
-    curl http://localhost/api/
+    http://localhost/apidocs/
     ```
 
 ## API
@@ -50,8 +50,8 @@
 - 路徑：/api/upload_csv
 - 功能：上傳CSV文件
 - 參數：
-    - file: 上傳的CSV文件
-    - project_name: 專案名稱
+   - file: 上傳的CSV文件
+   - project_name: 專案名稱
 
 ### 取得CSV檔案信息
 
@@ -59,7 +59,7 @@
 - 路徑：/api/csv_info
 - 功能：取得CSV檔案信息
 - 參數：
-    - file_id: 文件ID
+   - file_id: 文件ID
 
 ### 取得所有CSV文件
 
@@ -73,7 +73,7 @@
 - 路徑：/api/csv_corr
 - 功能：取得CSV檔案相關性圖
 - 參數：
-    - file_id: 文件ID
+   - file_id: 文件ID
 
 ### 訓練模型
 
@@ -81,10 +81,10 @@
 - 路徑：/api/train_model
 - 功能：訓練模型
 - 參數：
-    - file_id: 文件ID
-    - mission_type: 任務類型
-    - feature: 特徵列表
-    - label: 標籤
+   - file_id: 文件ID
+   - mission_type: 任務類型
+   - feature: 特徵列表
+   - label: 標籤
 
 ### 取得訓練進度
 
@@ -92,7 +92,7 @@
 - 路徑：/api/train_progressing
 - 功能：取得訓練進度
 - 參數：
-    - file_id: 文件ID
+   - file_id: 文件ID
 
 ### 取得訓練結果
 
@@ -100,7 +100,7 @@
 - 路徑：/api/train_result
 - 功能：取得訓練結果
 - 參數：
-    - file_id: 文件ID
+   - file_id: 文件ID
 
 ### 取得訓練圖表
 
@@ -108,4 +108,4 @@
 - 路徑：/api/train_pic
 - 功能：取得訓練圖表
 - 參數：
-    - file_id: 文件ID
+   - file_id: 文件ID
