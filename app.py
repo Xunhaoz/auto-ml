@@ -1,23 +1,15 @@
 # -*- coding: utf-8 -*-
-
-import os
-import uuid
-import subprocess
+import json
 import threading
-
-from package.response import Response
-from package.database_models import *
-from package.dataframe_operator import DataframeOperator
+from package.csv_operator import *
 from script.train_model_base import *
+from package.response import Response
+from script.basic_setting import setting
 
 from flasgger import Swagger
 from flask import Flask, request, send_file
 
-if not os.path.exists('file'):
-    os.makedirs('file')
-
-if not os.path.exists('./temp'):
-    os.makedirs('./temp')
+setting()
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///ml_database.db'
@@ -40,6 +32,7 @@ with app.app_context():
 
 @app.errorhandler(Exception)
 def handle_exception(e: Exception):
+    print(e)
     return Response.sever_error("sever error", str(e))
 
 
@@ -116,32 +109,15 @@ def upload_csv():
               type: string
               description: Error message describing the internal server error.
     """
-    file_id = str(uuid.uuid4())
-    file_dir = f'file/{file_id}/'
-    file_path = f'file/{file_id}/{file_id}.csv'
-    info_path = f'file/{file_id}/old_{file_id}.json'
-    pic_path = f'file/{file_id}/{file_id}.png'
 
     try:
         uploaded_file = request.files['file']
         project_name = request.form['project_name']
-        assert uploaded_file.filename.endswith('.csv'), "upload file should be file formate"
+        assert uploaded_file.filename.endswith('.csv'), "upload file should be csv file formate"
     except Exception as e:
         return Response.client_error('upload fail', str(e))
 
-    os.makedirs(file_dir)
-    uploaded_file.save(file_path)
-    dataframe_operator = DataframeOperator(file_path, uploaded_file.filename, project_name)
-    dataframe_operator.save_info(info_path)
-    dataframe_operator.data_preprocess()
-    dataframe_operator.save_pic(pic_path)
-
-    db.session.add(CSV(
-        file_id=file_id, file_name=uploaded_file.filename, project_name=project_name, mission_type=None,
-        status="pending", file_path=file_path, file_info_path=info_path, file_pic_path=pic_path
-    ))
-    db.session.commit()
-
+    file_id = upload_csv_pipeline(uploaded_file, project_name)
     return Response.response('upload success', {"uuid": file_id})
 
 
@@ -290,14 +266,18 @@ def get_all_csv():
                   mission_type:
                     type: string
                     description: regression or classification
-                  status:
+                  train_status:
+                    type: string
+                    description: pending or finish
+                  predict_status:
                     type: string
                     description: pending or finish
     """
     csvs = CSV.query.all()
 
     result = [{
-        'file_id': csv.file_id, 'project_name': csv.project_name, 'mission_type': csv.mission_type, 'status': csv.status
+        'file_id': csv.file_id, 'project_name': csv.project_name, 'file_name': csv.file_name,
+        'mission_type': csv.mission_type, 'train_status': csv.train_status, 'predict_status': csv.predict_status,
     } for csv in csvs]
 
     return Response.response('get csvs success', result)
@@ -440,27 +420,19 @@ def train_model():
 
     try:
         file_id = request.form['file_id']
-        mission_type = request.form['mission_type']
-        feature = request.form['feature'].split(',')
         label = request.form['label']
+        feature = request.form['feature'].split(',')
+        mission_type = request.form['mission_type']
     except Exception as e:
         Response.client_error("input error", e)
 
     csv = CSV.query.filter_by(file_id=file_id).first()
-    if not (csv and os.path.exists(csv.file_path)):
+    if not (csv and os.path.exists(csv.processed_file_path)):
         return Response.not_found('file not found')
 
-    csv.mission_type = mission_type
-    db.session.commit()
-
     threading.Thread(
-        target=training_pipline,
-        args=(file_id, csv.file_path, label, feature, mission_type, app), daemon=True
-    ).start()
-
-    threading.Thread(
-        target=training_plotting_pipline,
-        args=(file_id, csv.file_path, label, feature, mission_type, app), daemon=True
+        target=training_pipeline,
+        args=(file_id, label, feature, mission_type, app), daemon=True
     ).start()
 
     return Response.response("training", {"uuid": file_id})
@@ -487,27 +459,12 @@ def get_train_result():
         description: File not found.
     """
     file_id = request.args.get('file_id')
-    result = {}
-    csvs = Classification.query.filter_by(file_id=file_id).all()
-    for csv in csvs:
-        result[csv.model] = {
-            'accuracy': csv.accuracy,
-            'precision': csv.precision,
-            'recall': csv.recall
-        }
 
-    csvs = Regression.query.filter_by(file_id=file_id).all()
-    for csv in csvs:
-        result[csv.model] = {
-            'mse': csv.mse,
-            'mae': csv.mae,
-            'r_square': csv.r_square
-        }
+    csv = CSV.query.filter_by(file_id=file_id).first()
+    if not (csv and os.path.exists(csv.processed_file_path)):
+        return Response.not_found('file not found')
 
-    if len(result) == 0:
-        return Response.not_found("file not found")
-
-    return Response.response("get file result", result)
+    return send_file(csv.file_cv_res_path)
 
 
 @app.route('/api/train_pic', methods=['GET'])
@@ -546,19 +503,150 @@ def get_train_pic():
               description: Error message describing the internal server error.
     """
     file_id = request.args.get('file_id')
-    result = []
-    csvs = Classification.query.filter_by(file_id=file_id).order_by('accuracy').all()
-    for csv in csvs:
-        result.append(csv.model)
+    csv = CSV.query.filter_by(file_id=file_id).first()
+    if not (csv and os.path.exists(csv.processed_file_path)):
+        return Response.not_found('file not found')
 
-    csvs = Regression.query.filter_by(file_id=file_id).order_by('r_square').all()
-    for csv in csvs:
-        result.append(csv.model)
+    with open(csv.file_cv_res_path, 'r') as f:
+        cv_result = json.load(f)
 
-    if len(result) == 0:
-        return Response.not_found("file not found")
+    queue = []
+    if csv.mission_type == "classification":
+        for k, v in cv_result.items():
+            queue.append((k, v['test_accuracy'] + v['test_average_precision'] + v['test_recall_weighted']))
 
-    return send_file(f'file/{file_id}/{result[-1]}.png')
+    elif csv.mission_type == "regression":
+        for k, v in cv_result.items():
+            queue.append((k, -v['test_mean_absolute_error'] - v['test_mean_squared_error'] + v['test_r2']))
+
+    model_name = sorted(queue, key=lambda x: x[1], reverse=True)[0][0]
+    png_path = csv.processed_file_path.split('/')
+    png_path[-1] = model_name + '.png'
+
+    return send_file('/'.join(png_path))
+
+
+@app.route('/api/train_predict', methods=['POST'])
+def predict_csv():
+    """
+    Uploads a CSV file and saves information to the database.
+
+    ---
+    tags:
+      - AI
+
+    parameters:
+      - name: file
+        in: formData
+        type: file
+        required: true
+        description: The predict CSV file to upload.
+
+      - name: file_id
+        in: formData
+        type: string
+        required: true
+        description: The ID of the CSV file.
+
+      - name: feature
+        in: formData
+        type: string
+        required: true
+        description: The feature column name. (Passing feature names, which split like csv by ',')
+
+      - name: label
+        in: formData
+        type: string
+        required: true
+        description: The label column name. (Passing label name, which selected by radios)
+
+
+    responses:
+      200:
+        description: Upload success.
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: upload success.
+            response:
+              type: object
+              properties:
+                uuid:
+                  type: string
+                  description: The unique identifier for the uploaded file.
+      400:
+        description: Upload fail.
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: upload fail.
+            response:
+              type: string
+              description: Error message describing the reason for failure.
+      404:
+        description: File not found
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: file not found
+            response:
+              type: string
+              description: Error message describing the internal server error.
+      500:
+        description: Sever error.
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: sever error
+            response:
+              type: string
+              description: Error message describing the internal server error.
+    """
+
+    file_id = request.form['file_id']
+    csv = CSV.query.filter_by(file_id=file_id).first()
+
+    if not (csv and os.path.exists(csv.file_pic_path)):
+        return Response.not_found('file not found')
+
+    class_csvs = Classification.query.filter_by(file_id=file_id).all()
+    reg_csvs = Regression.query.filter_by(file_id=file_id).all()
+
+    file_id = str(uuid.uuid4())
+    file_dir = f'file/{file_id}/'
+    file_path = f'file/{file_id}/{file_id}.csv'
+    info_path = f'file/{file_id}/old_{file_id}.json'
+    pic_path = f'file/{file_id}/{file_id}.png'
+
+    try:
+        uploaded_file = request.files['file']
+        project_name = request.form['project_name']
+        assert uploaded_file.filename.endswith('.csv'), "upload file should be file formate"
+    except Exception as e:
+        return Response.client_error('upload fail', str(e))
+
+    os.makedirs(file_dir)
+    uploaded_file.save(file_path)
+    dataframe_operator = DataframeOperator(file_path, uploaded_file.filename, project_name)
+    dataframe_operator.save_info(info_path)
+    dataframe_operator.data_preprocess()
+    dataframe_operator.save_pic(pic_path)
+
+    db.session.add(CSV(
+        file_id=file_id, file_name=uploaded_file.filename, project_name=project_name, mission_type=None,
+        status="pending", file_path=file_path, file_info_path=info_path, file_pic_path=pic_path
+    ))
+    db.session.commit()
+
+    return Response.response('upload success', {"uuid": file_id})
 
 
 if __name__ == '__main__':
