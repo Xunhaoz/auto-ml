@@ -19,9 +19,15 @@ class DataframeOperator:
         for column in columns:
             series = self.df[column]
             if 15 > len(series.value_counts()) or series.dtype == 'object':
-                self.df[column] = OrdinalEncoder().fit_transform(self.df[[column]])
+                if series.isna().sum() > len(series) / 4:
+                    self.df[column] = OrdinalEncoder(encoded_missing_value=-1).fit_transform(self.df[[column]])
+                else:
+                    self.df[column] = self.df[column].fillna(series.value_counts().index[0])
+                    self.df[column] = OrdinalEncoder().fit_transform(self.df[[column]])
             else:
-                self.df[column] = StandardScaler().fit_transform(self.df[[column]])
+                if series.isna().sum() > len(series) / 4:
+                    self.df[column] = self.df[column].fillna(self.df[column].mode())
+                    self.df[column] = StandardScaler().fit_transform(self.df[[column]])
 
         self.df.to_csv(self.file_path, index=False)
 
@@ -52,7 +58,6 @@ class DataframeOperator:
 
         with open(info_path, 'w') as file:
             json.dump(result, file)
-
 
     def save_pic(self, pic_path):
         plt.figure()

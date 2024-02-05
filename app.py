@@ -133,8 +133,8 @@ def upload_csv():
     uploaded_file.save(file_path)
     dataframe_operator = DataframeOperator(file_path, uploaded_file.filename, project_name)
     dataframe_operator.save_info(info_path)
-    dataframe_operator.save_pic(pic_path)
     dataframe_operator.data_preprocess()
+    dataframe_operator.save_pic(pic_path)
 
     db.session.add(CSV(
         file_id=file_id, file_name=uploaded_file.filename, project_name=project_name, mission_type=None,
