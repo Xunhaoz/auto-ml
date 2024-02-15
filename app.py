@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-import json
 import threading
-from package.csv_operator import *
-from script.train_model_base import *
 from package.response import Response
-from script.basic_setting import setting
+
+from script.info_filter import *
+from script.upload_csv_pipeline import *
+from script.basic_setting import *
+from script.training_pipeline import *
+from script.prediction_pipeline import *
 
 from flasgger import Swagger
 from flask import Flask, request, send_file
@@ -32,7 +34,7 @@ with app.app_context():
 
 @app.errorhandler(Exception)
 def handle_exception(e: Exception):
-    print(e)
+    app.logger.error(e)
     return Response.sever_error("sever error", str(e))
 
 
@@ -118,7 +120,7 @@ def upload_csv():
         return Response.client_error('upload fail', str(e))
 
     file_id = upload_csv_pipeline(uploaded_file, project_name)
-    return Response.response('upload success', {"uuid": file_id})
+    return Response.response('upload csv success', {"uuid": file_id})
 
 
 @app.route('/api/csv_info', methods=['GET'])
@@ -228,10 +230,13 @@ def get_csv_info():
     file_id = request.args.get('file_id')
     csv = CSV.query.filter_by(file_id=file_id).first()
 
-    if not (csv and os.path.exists(csv.file_info_path)):
+    if not (csv and os.path.exists(csv.preprocessing_config_path)):
         return Response.not_found('file not found')
 
-    return send_file(csv.file_info_path)
+    with open(csv.preprocessing_config_path, 'r') as json_file:
+        data = json.load(json_file)
+
+    return Response.response('get csv info success', csv_info_filter(data))
 
 
 @app.route('/api/all_csv', methods=['GET'])
@@ -273,11 +278,14 @@ def get_all_csv():
                     type: string
                     description: pending or finish
     """
-    csvs = CSV.query.all()
+    csvs = DatabaseOperator.select_all(CSV)
 
     result = [{
-        'file_id': csv.file_id, 'project_name': csv.project_name, 'file_name': csv.file_name,
-        'mission_type': csv.mission_type, 'train_status': csv.train_status, 'predict_status': csv.predict_status,
+        'file_id': csv.file_id,
+        'project_name': csv.project_name,
+        'file_name': csv.file_name,
+        'mission_type': csv.mission_type,
+        'train_status': csv.train_status,
     } for csv in csvs]
 
     return Response.response('get csvs success', result)
@@ -319,12 +327,11 @@ def get_csv_corr():
               description: Error message describing the internal server error.
     """
     file_id = request.args.get('file_id')
-    csv = CSV.query.filter_by(file_id=file_id).first()
-
-    if not (csv and os.path.exists(csv.file_pic_path)):
+    csv = DatabaseOperator.select_one(CSV, {'file_id': file_id})
+    if not (csv and os.path.exists(csv.correlation_matrix_path)):
         return Response.not_found('file not found')
 
-    return send_file(csv.file_pic_path)
+    return send_file(csv.correlation_matrix_path)
 
 
 @app.route('/api/train_model', methods=['POST'])
@@ -426,8 +433,8 @@ def train_model():
     except Exception as e:
         Response.client_error("input error", e)
 
-    csv = CSV.query.filter_by(file_id=file_id).first()
-    if not (csv and os.path.exists(csv.processed_file_path)):
+    csv = DatabaseOperator.select_one(CSV, {'file_id': file_id})
+    if not (csv and os.path.exists(csv.processed_data_path)):
         return Response.not_found('file not found')
 
     threading.Thread(
@@ -526,40 +533,147 @@ def get_train_pic():
     return send_file('/'.join(png_path))
 
 
-@app.route('/api/train_predict', methods=['POST'])
+@app.route('/api/predict_info', methods=['GET'])
+def get_predict_info():
+    """
+    Get information about predict a CSV file.
+
+    ---
+    tags:
+      - PREDICT
+
+    parameters:
+      - name: file_id
+        in: query
+        type: string
+        required: true
+        description: The ID of the CSV file.
+
+    responses:
+      200:
+        description: Success
+        schema:
+          type: object
+          properties:
+            file_name:
+              type: string
+              description: name of file
+            project_name:
+              type: string
+              description: name of project
+            row_num:
+              type: integer
+              description: length of row
+            column_num:
+              type: integer
+              description: length of column
+            columns:
+              type: array
+              items:
+                type: string
+            column_info:
+              type: object
+              properties:
+                continuous_column:
+                  type: object
+                  properties:
+                    count:
+                      type: integer
+                      description: length of this column
+                    mean:
+                      type: number
+                      description: mean of this column
+                    std:
+                      type: number
+                      description: std of this column
+                    min:
+                      type: number
+                      description: min of this column
+                    25%:
+                      type: number
+                      description: 25% of this column
+                    50%:
+                      type: number
+                      description: 50% of this column
+                    75%:
+                      type: number
+                      description: 75% of this column
+                    max:
+                      type: number
+                      description: max of this column
+                    column_class:
+                      type: string
+                      description: continuous variable
+                    nan:
+                      type: integer
+                      description: null value of this column
+                    total:
+                      type: integer
+                      description: length of this column
+                discrete_column:
+                  type: object
+                  properties:
+                    value_name:
+                      type: integer
+                      description: number of this value
+                    column_class:
+                      type: string
+                      description: continuous variable
+                    nan:
+                      type: integer
+                      description: null value of this column
+                    total:
+                      type: integer
+                      description: length of this column
+      404:
+        description: File not found
+        schema:
+          type: object
+          properties:
+            description:
+              type: string
+              description: file not found
+            response:
+              type: string
+              description: Error message describing the internal server error.
+    """
+    file_id = request.args.get('file_id')
+    csv = CSV.query.filter_by(file_id=file_id).first()
+
+    if not (csv and os.path.exists(csv.cv_res_path)):
+        return Response.not_found('file not found')
+
+    with open(csv.preprocessing_config_path, 'r') as json_file:
+        preprocessing_config = json.load(json_file)
+
+    with open(csv.cv_res_path, 'r') as json_file:
+        cv_res = json.load(json_file)
+
+    predict_info = predict_info_filter(preprocessing_config, cv_res)
+    return Response.response('get csv info success', predict_info)
+
+
+@app.route('/api/predict', methods=['POST'])
 def predict_csv():
     """
     Uploads a CSV file and saves information to the database.
 
     ---
     tags:
-      - AI
+      - PREDICT
 
     parameters:
-      - name: file
-        in: formData
-        type: file
-        required: true
-        description: The predict CSV file to upload.
-
       - name: file_id
         in: formData
         type: string
         required: true
         description: The ID of the CSV file.
 
-      - name: feature
+      - name: features
         in: formData
         type: string
         required: true
         description: The feature column name. (Passing feature names, which split like csv by ',')
-
-      - name: label
-        in: formData
-        type: string
-        required: true
-        description: The label column name. (Passing label name, which selected by radios)
-
 
     responses:
       200:
@@ -575,7 +689,7 @@ def predict_csv():
               properties:
                 uuid:
                   type: string
-                  description: The unique identifier for the uploaded file.
+                  description: The predict result.
       400:
         description: Upload fail.
         schema:
@@ -612,42 +726,16 @@ def predict_csv():
     """
 
     file_id = request.form['file_id']
-    csv = CSV.query.filter_by(file_id=file_id).first()
+    feature = request.form['feature'].split(',')
+    csv = DatabaseOperator.select_one(CSV, {'file_id': file_id})
 
-    if not (csv and os.path.exists(csv.file_pic_path)):
+    if not (csv and os.path.exists(csv.cv_res_path)):
         return Response.not_found('file not found')
 
-    class_csvs = Classification.query.filter_by(file_id=file_id).all()
-    reg_csvs = Regression.query.filter_by(file_id=file_id).all()
+    predict = prediction_pipeline(csv, feature)
 
-    file_id = str(uuid.uuid4())
-    file_dir = f'file/{file_id}/'
-    file_path = f'file/{file_id}/{file_id}.csv'
-    info_path = f'file/{file_id}/old_{file_id}.json'
-    pic_path = f'file/{file_id}/{file_id}.png'
-
-    try:
-        uploaded_file = request.files['file']
-        project_name = request.form['project_name']
-        assert uploaded_file.filename.endswith('.csv'), "upload file should be file formate"
-    except Exception as e:
-        return Response.client_error('upload fail', str(e))
-
-    os.makedirs(file_dir)
-    uploaded_file.save(file_path)
-    dataframe_operator = DataframeOperator(file_path, uploaded_file.filename, project_name)
-    dataframe_operator.save_info(info_path)
-    dataframe_operator.data_preprocess()
-    dataframe_operator.save_pic(pic_path)
-
-    db.session.add(CSV(
-        file_id=file_id, file_name=uploaded_file.filename, project_name=project_name, mission_type=None,
-        status="pending", file_path=file_path, file_info_path=info_path, file_pic_path=pic_path
-    ))
-    db.session.commit()
-
-    return Response.response('upload success', {"uuid": file_id})
+    return Response.response('predict success', predict)
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host="0.0.0.0", port=80)
+    app.run(debug=True, host="0.0.0.0", port=5000)
