@@ -524,14 +524,13 @@ def get_train_pic():
         for k, v in cv_result['results'].items():
             queue.append((k, v['test_accuracy'] + v['test_average_precision'] + v['test_recall_weighted']))
 
-    elif csv.mission_type['results'] == "regression":
-        for k, v in cv_result.items():
+    elif csv.mission_type == "regression":
+        for k, v in cv_result['results'].items():
             queue.append((k, -v['test_mean_absolute_error'] - v['test_mean_squared_error'] + v['test_r2']))
 
     model_name = sorted(queue, key=lambda x: x[1], reverse=True)[0][0]
     png_path = csv.raw_data_path.split('/')
     png_path[-1] = model_name + '.png'
-
     return send_file('/'.join(png_path))
 
 
