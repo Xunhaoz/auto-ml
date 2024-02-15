@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import threading
 from package.response import Response
 
@@ -468,10 +469,10 @@ def get_train_result():
     file_id = request.args.get('file_id')
 
     csv = CSV.query.filter_by(file_id=file_id).first()
-    if not (csv and os.path.exists(csv.processed_file_path)):
+    if not (csv and os.path.exists(csv.cv_res_path)):
         return Response.not_found('file not found')
 
-    return send_file(csv.file_cv_res_path)
+    return send_file(csv.cv_res_path)
 
 
 @app.route('/api/train_pic', methods=['GET'])
@@ -510,24 +511,25 @@ def get_train_pic():
               description: Error message describing the internal server error.
     """
     file_id = request.args.get('file_id')
-    csv = CSV.query.filter_by(file_id=file_id).first()
-    if not (csv and os.path.exists(csv.processed_file_path)):
+    csv = DatabaseOperator.select_one(CSV, {'file_id': file_id})
+
+    if not (csv and os.path.exists(csv.cv_res_path)):
         return Response.not_found('file not found')
 
-    with open(csv.file_cv_res_path, 'r') as f:
+    with open(csv.cv_res_path, 'r') as f:
         cv_result = json.load(f)
 
     queue = []
     if csv.mission_type == "classification":
-        for k, v in cv_result.items():
+        for k, v in cv_result['results'].items():
             queue.append((k, v['test_accuracy'] + v['test_average_precision'] + v['test_recall_weighted']))
 
-    elif csv.mission_type == "regression":
+    elif csv.mission_type['results'] == "regression":
         for k, v in cv_result.items():
             queue.append((k, -v['test_mean_absolute_error'] - v['test_mean_squared_error'] + v['test_r2']))
 
     model_name = sorted(queue, key=lambda x: x[1], reverse=True)[0][0]
-    png_path = csv.processed_file_path.split('/')
+    png_path = csv.raw_data_path.split('/')
     png_path[-1] = model_name + '.png'
 
     return send_file('/'.join(png_path))
@@ -663,17 +665,11 @@ def predict_csv():
       - PREDICT
 
     parameters:
-      - name: file_id
+      - name: predict_payload
         in: formData
         type: string
         required: true
-        description: The ID of the CSV file.
-
-      - name: features
-        in: formData
-        type: string
-        required: true
-        description: The feature column name. (Passing feature names, which split like csv by ',')
+        description: The feature column name. (come from json dict)
 
     responses:
       200:
@@ -725,10 +721,13 @@ def predict_csv():
               description: Error message describing the internal server error.
     """
 
-    file_id = request.form['file_id']
-    feature = request.form['feature'].split(',')
-    csv = DatabaseOperator.select_one(CSV, {'file_id': file_id})
+    predict_payload = request.form['predict_payload']
+    predict_payload = json.loads(predict_payload)
 
+    file_id = predict_payload['file_id']
+    feature = predict_payload['feature']
+
+    csv = DatabaseOperator.select_one(CSV, {'file_id': file_id})
     if not (csv and os.path.exists(csv.cv_res_path)):
         return Response.not_found('file not found')
 

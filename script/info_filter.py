@@ -9,7 +9,7 @@ def csv_info_filter(d: dict) -> dict:
 
 def predict_info_filter(preprocessing_config: dict, cv_res: dict) -> dict:
     attr_from_old_dict = {'project_name', 'file_name'}
-    pop_from_column_info = {'total', 'nan', 'mean', 'std', 'min', '25%', '50%', '75%', 'max', 'encode_mapping', 'mode'}
+    pop_from_column_info = {'total', 'nan', 'mean', 'std', 'min', '25%', '50%', '75%', 'max', 'encode_mapping', 'mode', 'r_encode_mapping'}
 
     new_d = {attr: preprocessing_config[attr] for attr in attr_from_old_dict}.copy()
     new_d['column_info'] = {}
