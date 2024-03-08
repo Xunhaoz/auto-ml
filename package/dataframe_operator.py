@@ -63,11 +63,14 @@ class DataFrameOperator:
         predict_df.to_csv(self.file_dir / Path('predict_preprocessed_data.csv'), index=False)
         return predict_df
 
-    def reverse_preprocessing_predict_csv(self, result_path):
+    def reverse_preprocessing_predict_csv(self, result_path, feature):
         train_df = pd.read_csv(self.file_dir / Path('raw_data.csv'))
         result_df = pd.read_csv(result_path)
 
         for column, column_info in self.preprocessed_config.items():
+            if column not in feature:
+                continue
+
             if self.preprocessed_config[column]['column_class'] == 'continuous variable':
                 result_df[column] = result_df[column] * train_df[column].std() + train_df[column].mean()
 

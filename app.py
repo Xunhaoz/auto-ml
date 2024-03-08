@@ -15,6 +15,10 @@ from script.train_model_pipeline import *
 from flasgger import Swagger
 from flask import Flask, request, send_file
 
+import logging
+import os.path
+from logging.handlers import TimedRotatingFileHandler
+
 setting()
 
 app = Flask(__name__)
@@ -30,6 +34,15 @@ app.config['SWAGGER'] = {
 swagger = Swagger(app)
 db.init_app(app)
 
+# logging
+if not os.path.exists('logging'):
+    os.mkdir('logging')
+handler = TimedRotatingFileHandler('logging/flask-error.log', when='midnight', interval=1, backupCount=7)
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - IP: %(ip)s - Route: %(route)s - Message: %(message)s')
+handler.setFormatter(formatter)
+app.logger.addHandler(handler)
+
 with app.app_context():
     db.session.remove()
     db.drop_all()
@@ -41,7 +54,9 @@ if not os.path.exists('file'):
 
 @app.errorhandler(Exception)
 def handle_exception(e: Exception):
-    app.logger.error(e)
+    ip = request.remote_addr if request else 'unknown'
+    route = request.url_rule.rule if request.url_rule else 'unknown'
+    app.logger.error(f"An exception occurred: {str(e)}", extra={'ip': ip, 'route': route})
     return Response.sever_error("sever error", str(e))
 
 
@@ -476,9 +491,10 @@ def get_csv_corr():
     file_id = request.args.get('file_id')
 
     csv = DatabaseOperator.select_one(CSV, {'file_id': file_id})
+
     if not csv:
         return Response.not_found('file not found', f'{file_id=} not found')
-    if not os.path.exists(csv.file_dir + '\\raw_data.csv'):
+    if not os.path.exists(Path(csv.file_dir) / Path('raw_data.csv')):
         return Response.not_found('file not found', f'{file_id=} not found')
 
     dfo = DataFrameOperator(csv.file_dir, csv.preprocessed_config)
@@ -729,7 +745,7 @@ def get_prediction():
     aio = AiOperator(file_id, df, train_result['label'], train_result['feature'], train_result['mission_type'], app)
     aio.get_predict()
 
-    dfo.reverse_preprocessing_predict_csv(f'{csv.file_dir}/{model}_prediction.csv')
+    dfo.reverse_preprocessing_predict_csv(f'{csv.file_dir}/{model}_prediction.csv', feature=train_result['feature'])
 
     return send_file(f'{csv.file_dir}/{model}_prediction.csv')
 
